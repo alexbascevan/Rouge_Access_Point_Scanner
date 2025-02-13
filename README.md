@@ -60,6 +60,11 @@ Where `<interface>` is the network interface to use for scanning (e.g., `wlan0`,
 3. Show live updates with only live alerts (no full AP table):
 
     ```bash
-    python scan.py wlan0 -L -A
+    python scan.py wlan0  -A
+    ```
+4. Scan using whitelist with live updates for 10 seconds:
+
+    ```bash
+    python scan.py wlan0 -d 10 -L
     ```
 
