@@ -69,4 +69,6 @@ Where `<interface>` is the network interface to use for scanning (e.g., `wlan0`,
     ```bash
     python scan.py wlan0 -d 10 -L
     ```
-
+![Live Scanning](assets/s1.png)
+![Live Alerts](assets/s1.png)
+![Help](assets/s1.png)
