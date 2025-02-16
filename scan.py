@@ -1,4 +1,16 @@
 #!/usr/bin/env python3
+
+
+'''
+     ▄▄▖  ▗▄▖ ▗▄▄▖      ▗▄▄▖ ▗▄▄▖ ▗▄▖ ▗▖  ▗▖▗▖  ▗▖▗▄▄▄▖▗▄▄▖ 
+    ▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌    ▐▌   ▐▌   ▐▌ ▐▌▐▛▚▖▐▌▐▛▚▖▐▌▐▌   ▐▌ ▐▌
+    ▐▛▀▚▖▐▛▀▜▌▐▛▀▘      ▝▀▚▖▐▌   ▐▛▀▜▌▐▌ ▝▜▌▐▌ ▝▜▌▐▛▀▀▘▐▛▀▚▖
+    ▐▌ ▐▌▐▌ ▐▌▐▌       ▗▄▄▞▘▝▚▄▄▖▐▌ ▐▌▐▌  ▐▌▐▌  ▐▌▐▙▄▄▖▐▌ ▐▌
+
+    Rogue Access Point Scanner
+    Author: Alex Bascevan
+'''
+
 import json
 import os
 import argparse
@@ -6,57 +18,68 @@ import time
 import struct
 from scapy.all import *
 
-# Dictionary to hold AP data, keyed by BSSID.
-# Each entry includes: essid, bssid, pwr (list of RSSI values), beacons, data, channel (list),
-# mb (maximum bit rate), enc, cipher, auth, and pmf.
+# This dictionary stores all the Access Point (AP) info, using the BSSID as the key.
+# For each AP we record details like ESSID, signal power values, beacon counts, data frame counts,
+# channel numbers, maximum bit rate, encryption type, cipher, authentication method, and PMF status.
 ap_data = {}
-json_file = "scan_results.json"   # Output JSON file with all data
-alert_file = "alert.json"         # Alert file for unwhitelisted/rogue APs
+json_file = "scan_results.json"   # File to save the full scan results in JSON format
+alert_file = "alert.json"         # File to save alerts for rogue or unwhitelisted APs
 
-# List to store unique alerts (each will be a full copy of the AP data with an extra "alert_type" field)
+# List to keep track of alerts. Each alert is a copy of an AP's data with an extra "alert_type" field.
 alerts = []
 
 def save_to_json():
-    """Save AP data to JSON file."""
+    """Dump the current AP data into a JSON file for later review."""
     with open(json_file, "w") as f:
         json.dump(ap_data, f, indent=4)
 
 def save_alert_data():
-    """Save all alert data to JSON file."""
+    """Dump all alerts into a JSON file for later review."""
     with open(alert_file, "w") as f:
         json.dump(alerts, f, indent=4)
 
 def parse_rsn(rsn_ie):
     """
-    Parse the RSN IE (ID 48) and return a dict with keys:
-       enc, cipher, auth, pmf_capable, and pmf_required.
-    This is a simplified parser.
+    Parse the RSN Information Element (IE) found in beacon frames (ID 48).
+    This function extracts and returns a dictionary with encryption info:
+      - enc: Encryption protocol (e.g., WPA2)
+      - cipher: Cipher used (e.g., CCMP)
+      - auth: Authentication method (e.g., PSK)
+      - pmf_capable: Whether the AP supports Protected Management Frames
+      - pmf_required: Whether PMF is required
     """
     try:
+        # The first two bytes represent the RSN version
         version = struct.unpack("<H", rsn_ie[0:2])[0]
         if version != 1:
             return {}
-        group_cipher = rsn_ie[2:6]  # 4 bytes
+        # Next 4 bytes are the group cipher suite
+        group_cipher = rsn_ie[2:6]
+        # Get the number of pairwise cipher suites
         pairwise_count = struct.unpack("<H", rsn_ie[6:8])[0]
         pairwise_list_length = pairwise_count * 4
+        # Extract the first pairwise cipher suite (we use only one for our purpose)
         pairwise_cipher = rsn_ie[8:12]
+        # Calculate offset for AKM (authentication) suites
         akm_count_offset = 8 + pairwise_list_length
         akm_count = struct.unpack("<H", rsn_ie[akm_count_offset:akm_count_offset+2])[0]
         akm_list_length = akm_count * 4
-        akm_suite = rsn_ie[akm_count_offset+2:akm_count_offset+6]  # first AKM suite
-        # Check if RSN Capabilities field is present (optional; 2 bytes)
+        # Get the first AKM suite from the list
+        akm_suite = rsn_ie[akm_count_offset+2:akm_count_offset+6]
+        # Check if RSN Capabilities (optional 2 bytes) are present
         rsn_capabilities = None
         expected_length_without_cap = akm_count_offset + 2 + akm_list_length
         if len(rsn_ie) >= expected_length_without_cap + 2:
             rsn_capabilities = struct.unpack("<H", rsn_ie[expected_length_without_cap:expected_length_without_cap+2])[0]
         pmf_capable = False
         pmf_required = False
+        # Bit 6 indicates PMF capability; bit 7 indicates PMF requirement.
         if rsn_capabilities is not None:
-            # Bit 6 (0x0040) indicates PMF capable; bit 7 (0x0080) indicates PMF required.
             if rsn_capabilities & 0x0040:
                 pmf_capable = True
             if rsn_capabilities & 0x0080:
                 pmf_required = True
+        # Mapping values for the cipher and authentication suites
         cipher_map = {1:"WEP-40", 2:"TKIP", 4:"CCMP", 5:"WEP-104"}
         akm_map = {1:"802.1X", 2:"PSK"}
         enc = "WPA2"
@@ -64,17 +87,18 @@ def parse_rsn(rsn_ie):
         auth = akm_map.get(akm_suite[3], "Unknown")
         return {"enc": enc, "cipher": cipher, "auth": auth, "pmf_capable": pmf_capable, "pmf_required": pmf_required}
     except Exception:
+        # In case of any parsing error, return an empty dictionary.
         return {}
 
 def packet_handler(pkt, verbose, whitelist, live_alerts_only):
-    """Process sniffed packets and update AP data."""
-    if pkt.haslayer(Dot11Beacon):  # Beacon frame
-        bssid = pkt[Dot11].addr2
-        raw_ssid = pkt[Dot11Elt].info.decode(errors="ignore").strip()
-        ssid = raw_ssid if raw_ssid else "<Hidden>"
+    """Process each sniffed packet to extract and update AP data."""
+    if pkt.haslayer(Dot11Beacon):  # Handling beacon frames
+        bssid = pkt[Dot11].addr2  # The BSSID is in the addr2 field
+        raw_ssid = pkt[Dot11Elt].info.decode(errors="ignore").strip()  # Extract the SSID safely
+        ssid = raw_ssid if raw_ssid else "<Hidden>"  # Mark hidden networks
         display_essid = ssid
         signal_strength = pkt.dBm_AntSignal if hasattr(pkt, "dBm_AntSignal") else None
-        encryption = "OPN"  # Default to open
+        encryption = "OPN"  # Default assumption: network is open
         auth = ""
         cipher = ""
         pmf_str = "No"  # Default PMF info
@@ -83,25 +107,26 @@ def packet_handler(pkt, verbose, whitelist, live_alerts_only):
         extended_rates = []
         rsn_ie = None
 
-        # Loop over Dot11Elt layers to extract IEs.
+        # Iterate through the 802.11 elements (IEs) in the beacon frame to gather info.
         elt = pkt.getlayer(Dot11Elt)
         while elt:
-            if elt.ID == 0:  # SSID
-                pass  # Already extracted
-            elif elt.ID == 1:  # Supported Rates
+            if elt.ID == 0:  # SSID element; already handled above.
+                pass
+            elif elt.ID == 1:  # Supported Rates element
                 supported_rates += list(elt.info)
-            elif elt.ID == 50:  # Extended Supported Rates
+            elif elt.ID == 50:  # Extended Supported Rates element
                 extended_rates += list(elt.info)
-            elif elt.ID == 3:  # DS Parameter Set: channel
+            elif elt.ID == 3:  # DS Parameter Set which contains the channel info
                 channel = elt.info[0]
-            elif elt.ID == 48:  # RSN IE
+            elif elt.ID == 48:  # RSN IE element for WPA2 details
                 rsn_ie = elt.info
             elt = elt.payload.getlayer(Dot11Elt)
 
+        # If channel info wasn't found in the loop, try another method.
         if channel is None:
             channel = pkt[Dot11Elt].channel
 
-        # Compute Maximum Bit Rate (MB) from supported rates.
+        # Determine the maximum bit rate from the supported and extended rates.
         all_rates = supported_rates + extended_rates
         if all_rates:
             rates_mbps = [rate * 0.5 for rate in all_rates]
@@ -109,7 +134,7 @@ def packet_handler(pkt, verbose, whitelist, live_alerts_only):
         else:
             mb = "N/A"
 
-        # Parse RSN IE for encryption and PMF details.
+        # Parse RSN IE if present to get encryption details.
         if rsn_ie:
             rsn_info = parse_rsn(rsn_ie)
             if rsn_info:
@@ -123,17 +148,20 @@ def packet_handler(pkt, verbose, whitelist, live_alerts_only):
                 else:
                     pmf_str = "No"
             else:
+                # Fallback values if RSN parsing fails.
                 encryption = "WPA2"
                 cipher = "CCMP"
                 auth = "PSK"
         else:
+            # If there’s no RSN IE, then the network is likely open.
             encryption = "OPN"
             cipher = ""
             auth = ""
             pmf_str = "No"
 
-        # Update ap_data keyed by BSSID.
+        # Update the global AP data with this beacon's info.
         if bssid not in ap_data:
+            # New AP found; create a new record.
             ap_data[bssid] = {
                 "essid": display_essid,
                 "bssid": bssid,
@@ -148,30 +176,30 @@ def packet_handler(pkt, verbose, whitelist, live_alerts_only):
                 "pmf": pmf_str
             }
         else:
+            # Existing AP; update counts and append new info if applicable.
             ap_data[bssid]["beacons"] += 1
             if signal_strength is not None and signal_strength not in ap_data[bssid]["pwr"]:
                 ap_data[bssid]["pwr"].append(signal_strength)
             if channel is not None and channel not in ap_data[bssid]["channel"]:
                 ap_data[bssid]["channel"].append(channel)
 
-        # --- Whitelist Check (using both ESSID and BSSID) ---
+        # Check against the whitelist (expected format: "ESSID,BSSID").
         whitelisted = False
-        # The whitelist entries are expected in the format "ESSID,BSSID"
         for entry in whitelist:
             try:
                 entry_essid, entry_bssid = entry.split(',')
             except ValueError:
-                continue  # Skip improperly formatted lines
+                continue  # Skip this entry if it’s not correctly formatted.
             if ssid == entry_essid and bssid == entry_bssid:
                 whitelisted = True
                 break
 
         if not whitelisted:
-            # Only perform evil twin detection if the network is not hidden.
-            if ssid != "<Hidden>":
-                # Check for evil twin: same ESSID seen with a different BSSID
+            # For non-whitelisted networks, check for an "evil twin" scenario (same ESSID, different BSSID).
+            if ssid != "<Hidden>":  # Only if the network isn’t hidden
                 for known_bssid, known_data in ap_data.items():
                     if known_data["essid"] == display_essid and known_bssid != bssid:
+                        # Evil twin alert.
                         if not any(alert.get('bssid') == bssid for alert in alerts):
                             alert_data = ap_data[bssid].copy()
                             alert_data["alert_type"] = "Evil Twin Detected"
@@ -179,12 +207,13 @@ def packet_handler(pkt, verbose, whitelist, live_alerts_only):
                         if live_alerts_only:
                             print(f"[Evil Twin ALERT] ESSID: {display_essid} BSSID: {bssid} Signal: {signal_strength} Channel: {channel}")
                             print(f"Another BSSID for ESSID {display_essid} detected: {known_bssid}")
-            # Create an alert for this not-whitelisted network.
+            # Create an alert for a network that isn’t whitelisted.
             if not any(alert.get('bssid') == bssid for alert in alerts):
                 alert_data = ap_data[bssid].copy()
                 alert_data["alert_type"] = "Not Whitelisted"
                 alerts.append(alert_data)
 
+        # If verbose mode is on, print out detailed information about this beacon.
         if verbose:
             print(f"[Verbose] Processing Beacon from BSSID: {bssid}, ESSID: {display_essid}, Signal: {signal_strength}, Channel: {channel}")
             print(f"[Verbose] Encryption: {encryption}, Cipher: {cipher}, Auth: {auth}, PMF: {pmf_str}")
@@ -192,14 +221,17 @@ def packet_handler(pkt, verbose, whitelist, live_alerts_only):
             print(f"[Verbose] RSN IE: {rsn_ie if rsn_ie else 'None'}")
 
     elif pkt.haslayer(Dot11) and pkt[Dot11].type == 2:
-        # Process data frames (type 2) for counting data frames.
+        # For data frames, count them for the associated AP.
         bssid_data = pkt[Dot11].addr3
         if bssid_data in ap_data:
             ap_data[bssid_data]["data"] += 1
 
 def print_ap_data_table(ap_data, title="All Detected Access Points"):
-    """Display the AP data in tabular format.
-       Columns: BSSID, Avg PWR, Beacons, #Data, CH, MB, ENC, CIPHER, AUTH, PMF, ESSID"""
+    """
+    Nicely print the collected AP data in a table format.
+    Columns include: BSSID, average signal power, beacon count, data count, channel(s), max bit rate,
+    encryption type, cipher, auth method, PMF info, and ESSID.
+    """
     print("=" * 120)
     print(title)
     print("=" * 120)
@@ -207,6 +239,7 @@ def print_ap_data_table(ap_data, title="All Detected Access Points"):
     print(header)
     print("=" * 120)
     for bssid, data in ap_data.items():
+        # Calculate the average power if we have recorded signal strengths.
         if data["pwr"]:
             avg_pwr = sum(data["pwr"]) / len(data["pwr"])
         else:
@@ -217,8 +250,10 @@ def print_ap_data_table(ap_data, title="All Detected Access Points"):
     print("=" * 120)
 
 def print_alerts_table(alerts, title="Alerts"):
-    """Display the alert data in tabular format.
-       It prints the same fields as the AP table plus the Alert Type."""
+    """
+    Nicely print the alerts in a table format.
+    Similar columns to the AP table, but with an extra column showing the type of alert.
+    """
     print("=" * 140)
     print(title)
     print("=" * 140)
@@ -237,7 +272,7 @@ def print_alerts_table(alerts, title="Alerts"):
     print("=" * 140)
 
 def main():
-
+    # If the user asks for help, display fancy ASCII art along with usage details.
     if '-h' in sys.argv or '--help' in sys.argv:
         print(r"""
                 ▗▄▄▖  ▗▄▖ ▗▄▄▖      ▗▄▄▖ ▗▄▄▖ ▗▄▖ ▗▖  ▗▖▗▖  ▗▖▗▄▄▄▖▗▄▄▖ 
@@ -250,7 +285,7 @@ def main():
                 Contact: alexbascevan@icloud.com
                 """)
 
-
+    # Set up our command line arguments
     parser = argparse.ArgumentParser(
         usage="%(prog)s [-h Help] iface [-c CHANNEL] [-d DURATION] [-v Verbose] [-w WHITELIST] [-L Live Output] [-A Live Alerts]",
         description="Wi-Fi network scanner that captures and analyzes Wi-Fi networks. "
@@ -266,6 +301,7 @@ def main():
                "    Show live updates with only live alerts (no full AP table)."
     )
 
+    # Define the required and optional parameters
     parser.add_argument("iface", help="Network interface to use (e.g., wlan0, mon0)")
     parser.add_argument("-c", "--channel", type=int, help="Channel to set for scanning")
     parser.add_argument("-d", "--duration", type=int, default=60, help="Duration for scanning in seconds")
@@ -276,34 +312,38 @@ def main():
 
     args = parser.parse_args()
 
-    # Handle whitelist argument.
+    # Load the whitelist if provided, otherwise set it to an empty set for no filtering.
     if args.whitelist:
         if os.path.exists(args.whitelist):
             whitelist = load_whitelist(args.whitelist)
         else:
+            # If a file doesn't exist, check if comma-separated list was given.
             whitelist = set(args.whitelist.split(","))
             print(f"Using whitelist from argument: {whitelist}")
     else:
         print("No whitelist provided, proceeding with no filtering.")
         whitelist = set()
 
+    # Set the Wi-Fi channel if the user specified one.
     if args.channel:
         print(f"Setting channel {args.channel}")
         os.system(f"iw dev {args.iface} set channel {args.channel}")
 
     print(f"Scanning on interface {args.iface}...\n")
     start_time = time.time()
+    # Adjust the timeout for each sniffing session based on whether live updates/alerts are showing.
     update_timeout = 1 if args.live_updates or args.live_alerts_only else 5
 
+    # Keep scanning for the specified duration 
     while time.time() - start_time < args.duration:
         sniff(iface=args.iface,
               prn=lambda pkt: packet_handler(pkt, args.verbose, whitelist, args.live_alerts_only),
               store=False,
               timeout=update_timeout)
-        save_to_json()  # Save periodically
+        save_to_json()  # Save the current scan results periodically
 
         if args.live_updates:
-            os.system("clear")
+            os.system("clear")  # Clear the terminal screen for a fresh display
             print_ap_data_table(ap_data)
             print_alerts_table(alerts)
 
@@ -311,10 +351,10 @@ def main():
             os.system("clear")
             print_alerts_table(alerts)
        
-
+    # After scanning, if live updates argument, show a final summary and save all data.
     if not args.live_updates and not args.live_alerts_only:
         print("\nScan complete.\n")
-        save_to_json()  # Final save
+        save_to_json()  # Final save of scan data
         print_ap_data_table(ap_data)
         print_alerts_table(alerts)
         save_alert_data()
