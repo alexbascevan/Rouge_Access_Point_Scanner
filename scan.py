@@ -252,7 +252,7 @@ def main():
 
 
     parser = argparse.ArgumentParser(
-
+        usage="%(prog)s [-h Help] iface [-c CHANNEL] [-d DURATION] [-v Verbose] [-w WHITELIST] [-L Live Output] [-A Live Alerts]",
         description="Wi-Fi network scanner that captures and analyzes Wi-Fi networks. "
                     "It supports filtering by whitelist (using ESSID and BSSID), logging detected networks, "
                     "and displaying live updates and alerts. PMF support (Protected Management Frames) is detected "
@@ -272,8 +272,7 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
     parser.add_argument("-w", "--whitelist", help="File containing whitelist entries (ESSID,BSSID per line)")
     parser.add_argument("-L", "--live-updates", action="store_true", help="Enable live update display")
-    parser.add_argument("-A", "--live-alerts-only", action="store_true",
-                        help="Enable live alert printing only (print only alerts during live updates)")
+    parser.add_argument("-A", "--live-alerts-only", action="store_true", help="Enable live alert printing only (print only alerts during live updates)")
 
     args = parser.parse_args()
 
