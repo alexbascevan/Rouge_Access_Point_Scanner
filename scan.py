@@ -16,20 +16,6 @@ alert_file = "alert.json"         # Alert file for unwhitelisted/rogue APs
 # List to store unique alerts (each will be a full copy of the AP data with an extra "alert_type" field)
 alerts = []
 
-def load_whitelist(whitelist_file):
-    """Load whitelist from file.
-       Each line should be formatted as: ESSID,BSSID
-       e.g., MyNetwork,00:11:22:33:44:55"""
-    if os.path.exists(whitelist_file):
-        with open(whitelist_file, "r") as f:
-            # Each whitelist entry is stored as a string "ESSID,BSSID"
-            whitelist = { line.strip() for line in f if line.strip() }
-        print(f"Loaded whitelist from {whitelist_file}: {whitelist}")
-        return whitelist
-    else:
-        print("No valid whitelist file found. Proceeding without filtering.")
-        return set()
-
 def save_to_json():
     """Save AP data to JSON file."""
     with open(json_file, "w") as f:
@@ -251,7 +237,22 @@ def print_alerts_table(alerts, title="Alerts"):
     print("=" * 140)
 
 def main():
+
+    if '-h' in sys.argv or '--help' in sys.argv:
+        print(r"""
+                ▗▄▄▖  ▗▄▖ ▗▄▄▖      ▗▄▄▖ ▗▄▄▖ ▗▄▖ ▗▖  ▗▖▗▖  ▗▖▗▄▄▄▖▗▄▄▖ 
+                ▐▌ ▐▌▐▌ ▐▌▐▌ ▐▌    ▐▌   ▐▌   ▐▌ ▐▌▐▛▚▖▐▌▐▛▚▖▐▌▐▌   ▐▌ ▐▌
+                ▐▛▀▚▖▐▛▀▜▌▐▛▀▘      ▝▀▚▖▐▌   ▐▛▀▜▌▐▌ ▝▜▌▐▌ ▝▜▌▐▛▀▀▘▐▛▀▚▖
+                ▐▌ ▐▌▐▌ ▐▌▐▌       ▗▄▄▞▘▝▚▄▄▖▐▌ ▐▌▐▌  ▐▌▐▌  ▐▌▐▙▄▄▖▐▌ ▐▌
+
+                Rogue Access Point Scanner
+                Author: Alex Bascevan
+                Contact: alexbascevan@icloud.com
+                """)
+
+
     parser = argparse.ArgumentParser(
+
         description="Wi-Fi network scanner that captures and analyzes Wi-Fi networks. "
                     "It supports filtering by whitelist (using ESSID and BSSID), logging detected networks, "
                     "and displaying live updates and alerts. PMF support (Protected Management Frames) is detected "

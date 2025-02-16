@@ -12,6 +12,8 @@ This Python script is designed to capture and analyze Wi-Fi networks to detect r
 
 ## Prerequisites
 
+# Wi-Fi Adapter MUST support Monitor Mode
+
 Ensure that the following libraries are installed:
 
 - `scapy`: A powerful interactive packet manipulation program.
